@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>iApp Live Previewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root { --apple-blue: #007aff; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #f2f2f7; color: #1c1c1e; overflow: hidden; }
+        header { padding: 16px 20px; background: rgba(255,255,255,0.8); backdrop-filter: blur(20px); border-bottom: 0.5px solid #d1d1d6; display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+        .upload-btn { background: var(--apple-blue); color: white; padding: 10px 20px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 15px; transition: opacity 0.2s; }
+        .upload-btn:active { opacity: 0.7; }
+        #file-input { display: none; }
+        .info { font-size: 13px; color: #8e8e93; }
+        #viewer { flex-grow: 1; border: none; background: white; width: 100%; border-radius: 20px 20px 0 0; box-shadow: 0 -5px 15px rgba(0,0,0,0.05); }
+        .empty-state { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; width: 80%; }
+    </style>
+</head>
+<body>
+
+<header>
+    <label class="upload-btn">
+        Open .iapp
+        <input type="file" id="file-input" accept=".iapp,.zip">
+    </label>
+    <div id="status" class="info">Ready for project</div>
+</header>
+
+<div id="container" style="flex-grow: 1; position: relative; display: flex;">
+    <div id="empty" class="empty-state">
+        <h2 style="color: #3a3a3c;">No App Loaded</h2>
+        <p style="color: #8e8e93;">Upload your .iapp file to see the live preview.</p>
+    </div>
+    <iframe id="viewer" style="display:none;"></iframe>
+</div>
+
+<script>
+    const fileInput = document.getElementById('file-input');
+    const viewer = document.getElementById('viewer');
+    const empty = document.getElementById('empty');
+    const status = document.getElementById('status');
+
+    fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        status.textContent = "Unpacking...";
+        
+        try {
+            const zip = await JSZip.loadAsync(file);
+            const fileMap = {};
+
+            // 1. Process all files into Blobs
+            for (const [filename, fileData] of Object.entries(zip.files)) {
+                if (fileData.dir) continue;
+                const content = await fileData.async("blob");
+                // Auto-detect MIME type based on extension
+                const type = filename.endsWith('.css') ? 'text/css' : 
+                             filename.endsWith('.js') ? 'text/javascript' : 
+                             filename.endsWith('.json') ? 'application/json' : 'text/html';
+                
+                const typedBlob = new Blob([content], { type });
+                fileMap[filename] = URL.createObjectURL(typedBlob);
+            }
+
+            // 2. Identify Entry Point
+            const entryName = zip.file("index.html") ? "index.html" : 
+                            zip.file("app.html") ? "app.html" : 
+                            Object.keys(fileMap).find(n => n.endsWith('.html'));
+
+            if (!entryName) throw new Error("No HTML file found in bundle.");
+
+            // 3. Update the HTML to use the new Blob URLs for CSS/JS
+            let htmlText = await zip.file(entryName).async("string");
+            
+            // This regex finds <link> and <script> tags and swaps local paths for Blob URLs
+            for (const [originalName, blobUrl] of Object.entries(fileMap)) {
+                const escapedName = originalName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`(src|href)=["']\\.?/?${escapedName}["']`, 'g');
+                htmlText = htmlText.replace(regex, `$1="${blobUrl}"`);
+            }
+
+            // 4. Inject into Viewer
+            const finalHtmlBlob = new Blob([htmlText], { type: 'text/html' });
+            viewer.src = URL.createObjectURL(finalHtmlBlob);
+            
+            // UI Toggle
+            viewer.style.display = "block";
+            empty.style.display = "none";
+            status.textContent = `Viewing: ${file.name}`;
+
+        } catch (err) {
+            status.textContent = "Error: " + err.message;
+            console.error(err);
+        }
+    });
+</script>
+
+</body>
+</html>
